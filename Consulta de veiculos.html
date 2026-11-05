@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Consulta tabela FIPE</title>
+</head>
+<body>
+  <h1>Consulta tabela FIPE</h1>
+
+  <p>
+    <button id="btnMarcas" type="button">Buscar Marcas</button>
+    <input id="marca" list="listaMarcas" placeholder="Digite a marca" autocomplete="off" disabled>
+    <datalist id="listaMarcas"></datalist>
+  </p>
+
+  <p>
+    <select id="modelo" disabled>
+      <option value="">Selecione um modelo</option>
+    </select>
+  </p>
+
+  <p>
+    <select id="ano" disabled>
+      <option value="">Selecione o ano</option>
+    </select>
+  </p>
+
+  <p>
+    <button id="btnPreco" type="button" disabled>Consultar preço</button>
+  </p>
+
+  <!-- Indicador de processamento -->
+  <p id="carregando" hidden>⏳ Carregando, aguarde...</p>
+  <p id="erro" role="alert" style="color: red;" hidden></p>
+
+  <div id="resultado" hidden>
+    <h2>Resultado</h2>
+    <p>Marca: <span id="rMarca"></span></p>
+    <p>Modelo: <span id="rModelo"></span></p>
+    <p>Ano: <span id="rAno"></span></p>
+    <p>Combustível: <span id="rCombustivel"></span></p>
+    <p>Código FIPE: <span id="rCodigo"></span></p>
+    <p>Mês de referência: <span id="rMes"></span></p>
+    <p><strong>Preço: <span id="rPreco"></span></strong></p>
+  </div>
+
+  <script>
+    const API = 'https://brasilapi.com.br/api/fipe';
+    const TIPO_VEICULO = 'carros';
+
+    const el = (id) => document.getElementById(id);
+    const btnMarcas = el('btnMarcas');
+    const inputMarca = el('marca');
+    const listaMarcas = el('listaMarcas');
+    const selModelo = el('modelo');
+    const selAno = el('ano');
+    const btnPreco = el('btnPreco');
+
+    let marcas = [];          // [{ nome, valor }]
+    let marcaAtual = null;    // marca selecionada
+    let requisicoes = 0;      // controla o indicador de "carregando"
+
+    function mostrarErro(msg) {
+      el('erro').textContent = msg;
+      el('erro').hidden = !msg;
+    }
+
+    async function comCarregamento(fn) {
+      requisicoes++;
+      el('carregando').hidden = false;
+      btnMarcas.disabled = true;
+      btnPreco.disabled = true;
+      mostrarErro('');
+      try {
+        return await fn();
+      } catch (e) {
+        mostrarErro('Erro: ' + e.message);
+      } finally {
+        requisicoes--;
+        if (requisicoes === 0) {
+          el('carregando').hidden = true;
+          btnMarcas.disabled = false;
+          btnPreco.disabled = !selAno.value;
+        }
+      }
+    }
+
+    async function api(caminho) {
+      const resp = await fetch(API + caminho);
+      if (!resp.ok) {
+        let msg = 'falha na requisição (' + resp.status + ')';
+        try {
+          const j = await resp.json();
+          if (j.message) msg = j.message;
+        } catch (_) {}
+        throw new Error(msg);
+      }
+      return resp.json();
+    }
+
+    function resetar(select, texto) {
+      select.innerHTML = '';
+      const op = document.createElement('option');
+      op.value = '';
+      op.textContent = texto;
+      select.appendChild(op);
+      select.disabled = true;
+    }
+
+    function esconderResultado() {
+      el('resultado').hidden = true;
+    }
+
+    btnMarcas.addEventListener('click', () => comCarregamento(async () => {
+      marcas = await api('/marcas/v1/' + TIPO_VEICULO);
+      listaMarcas.innerHTML = '';
+      marcas.forEach((m) => {
+        const op = document.createElement('option');
+        op.value = m.nome;
+        listaMarcas.appendChild(op);
+      });
+      inputMarca.disabled = false;
+      inputMarca.focus();
+    }));
+
+    inputMarca.addEventListener('input', () => {
+      const texto = inputMarca.value.trim().toLowerCase();
+      const marca = marcas.find((m) => m.nome.toLowerCase() === texto);
+
+      if (!marca) {
+        marcaAtual = null;
+        resetar(selModelo, 'Selecione um modelo');
+        resetar(selAno, 'Selecione o ano');
+        btnPreco.disabled = true;
+        esconderResultado();
+        return;
+      }
+      if (marcaAtual && marcaAtual.valor === marca.valor) return;
+      marcaAtual = marca;
+      carregarModelos(marca);
+    });
+
+    function carregarModelos(marca) {
+      resetar(selModelo, 'Selecione um modelo');
+      resetar(selAno, 'Selecione o ano');
+      btnPreco.disabled = true;
+      esconderResultado();
+
+      return comCarregamento(async () => {
+        const modelos = await api('/veiculos/v1/' + TIPO_VEICULO + '/' + marca.valor);
+        if (marcaAtual !== marca) return;
+
+        modelos.forEach((m) => {
+          const nome = m.modelo || m.nome || m.name || '';
+          const codigoFipe = m.codigoFipe || m.codigo || m.valor || '';
+          if (!nome || !codigoFipe) return;
+          const op = document.createElement('option');
+          op.value = codigoFipe;
+          op.textContent = nome;
+          selModelo.appendChild(op);
+        });
+        selModelo.disabled = false;
+      });
+    }
+
+    selModelo.addEventListener('change', () => {
+      resetar(selAno, 'Selecione o ano');
+      btnPreco.disabled = true;
+      esconderResultado();
+      if (!selModelo.value) return;
+
+      const codigoFipe = selModelo.value;
+      comCarregamento(async () => {
+        const precos = await api('/preco/v1/' + encodeURIComponent(codigoFipe));
+        if (selModelo.value !== codigoFipe) return;
+
+        precos.forEach((p) => {
+          const op = document.createElement('option');
+          op.value = p.anoModelo;
+          op.textContent = (p.anoModelo === 32000 ? 'Zero km' : p.anoModelo) + ' - ' + p.combustivel;
+          selAno.appendChild(op);
+        });
+        selAno.disabled = false;
+      });
+    });
+
+    selAno.addEventListener('change', () => {
+      btnPreco.disabled = !selAno.value;
+      esconderResultado();
+    });
+
+    btnPreco.addEventListener('click', () => comCarregamento(async () => {
+      const codigoFipe = selModelo.value;
+      const ano = Number(selAno.value);
+      esconderResultado();
+
+      const precos = await api('/preco/v1/' + encodeURIComponent(codigoFipe));
+      const p = precos.find((x) => x.anoModelo === ano);
+      if (!p) throw new Error('Nenhum preço encontrado para o ano selecionado.');
+
+      el('rMarca').textContent = p.marca;
+      el('rModelo').textContent = p.modelo;
+      el('rAno').textContent = p.anoModelo === 32000 ? 'Zero km' : p.anoModelo;
+      el('rCombustivel').textContent = p.combustivel;
+      el('rCodigo').textContent = p.codigoFipe;
+      el('rMes').textContent = p.mesReferencia;
+      el('rPreco').textContent = p.valor;
+      el('resultado').hidden = false;
+    }));
+  </script>
+</body>
+</html>
